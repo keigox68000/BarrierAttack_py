@@ -1,1 +1,5 @@
 *.pyxapp
+BarrierAttack_py.py
+*.json
+music.py
+/musics/*.*

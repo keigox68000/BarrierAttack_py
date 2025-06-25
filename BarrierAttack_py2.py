@@ -1,6 +1,7 @@
 import pyxel
 import math
 import random
+import json
 
 
 # --- ゲームの状態管理 ---
@@ -136,7 +137,7 @@ class Particle:
         self.x = x
         self.y = y
         angle = random.uniform(0, math.pi * 2)
-        velocity = random.uniform(0, options.get("speed", 2))  # スピード調整
+        velocity = random.uniform(0, options.get("speed", 2))
         self.vx = math.cos(angle) * velocity
         self.vy = math.sin(angle) * velocity
         self.life = options.get("life", 30) + random.uniform(
@@ -166,8 +167,18 @@ class App:
         # 解像度を320x240に変更
         pyxel.init(320, 240, title="Barrier Attack", fps=60)
 
-        # BGMと効果音をコード内で作成
-        self.create_sounds()
+        # (★★★ 修正点) BGMと効果音の管理方法を刷新
+        self.music_data = None
+        self.se_channel = 1  # 効果音はチャンネル2を使用
+        self.se_is_playing = False  # SEが再生中かどうかのフラグ
+
+        try:
+            with open("musics/bapy.json", "rt") as fin:
+                self.music_data = json.loads(fin.read())
+        except Exception as e:
+            print(f"BGMファイル 'musics/bapy.json' が読み込めませんでした: {e}")
+
+        self.create_sfx()  # 効果音を定義
 
         self.game_state = GameState.TITLE_DEMO
         self.state_timer = 0
@@ -207,24 +218,40 @@ class App:
         self.reset_full_demo()
         pyxel.run(self.update, self.draw)
 
-    def create_sounds(self):
-        """BGMと効果音をコードで作成"""
-        # 効果音
-        pyxel.sounds[0].set("c4", "n", "7", "f", 5)
-        pyxel.sounds[1].set("c1", "n", "3", "f", 20)
-        pyxel.sounds[3].set("g2g1g0g0", "p", "7", "f", 25)
-        pyxel.sounds[4].set("c1c0", "n", "7", "f", 30)
-        pyxel.sounds[5].set("e2", "p", "6", "f", 10)
-        pyxel.sounds[6].set("g2", "p", "6", "f", 10)
+    def create_sfx(self):
+        # 効果音をサウンド番号30番以降に定義
+        pyxel.sounds[30].set("c4", "n", "7", "f", 5)  # 発射
+        pyxel.sounds[31].set("c1", "n", "3", "f", 20)  # バリア衝突
+        pyxel.sounds[32].set("g2g1g0g0", "p", "7", "f", 25)  # プレイヤー被弾
+        pyxel.sounds[33].set("c1c0", "n", "7", "f", 30)  # 大きい爆発
+        pyxel.sounds[34].set("e2", "p", "6", "f", 10)  # 敵ヒット
+        pyxel.sounds[35].set("g2", "p", "6", "f", 10)  # 小さいヒット
 
-        # BGM
-        pyxel.sounds[10].set("a1a2c1c2", "p", "3", "f", 30)
-        pyxel.sounds[11].set("g1g2d2d3", "p", "3", "f", 30)
-        pyxel.sounds[12].set("c3 r g3 r", "t", "7", "f", 15)
-        pyxel.sounds[13].set("d3 r a3 r", "t", "7", "f", 15)
+    def play_bgm(self):
+        """BGMを再生する"""
+        if self.music_data:
+            # チャンネル0,1,3をBGM用に再生
+            for ch, sound_data in enumerate(self.music_data):
+                pyxel.sounds[ch].set(*sound_data)
+                if ch != self.se_channel:
+                    pyxel.play(ch, ch, loop=True)
+            # SEチャンネルも、対応するBGMサウンドで再生開始
+            pyxel.play(self.se_channel, self.se_channel, loop=True)
 
-        # (★★★ 修正点) Musicトラック0にサウンドを正しい引数で配置
-        pyxel.musics[0].set([], [], [10, 11], [12, 13])
+    def play_se(self, sound_no):
+        """効果音を割り込み再生する"""
+        pyxel.play(self.se_channel, sound_no, loop=False)
+        self.se_is_playing = True
+
+    def update_bgm_resume(self):
+        """SE再生後にBGMを復帰させる"""
+        # SE再生中フラグが立っており、かつSEチャンネルが再生を終えたら
+        if self.se_is_playing and pyxel.play_pos(self.se_channel) is None:
+            self.se_is_playing = False
+            # BGMの再生位置を取得 (チャンネル0を基準とする)
+            tick = pyxel.play_pos(0)[1] if pyxel.play_pos(0) else 0
+            # SEチャンネルでBGMをtickの位置から復帰
+            pyxel.play(self.se_channel, self.se_channel, tick=tick, loop=True)
 
     def reset_game(self):
         self.score = 0
@@ -233,8 +260,7 @@ class App:
         self.is_barrier_disabled = False
         self.init_entities()
         self.game_state = GameState.PLAYING
-        # BGM再生開始
-        pyxel.playm(0, loop=True)
+        self.play_bgm()
 
     def init_entities(self, is_for_demo=False):
         self.player.reset(is_for_demo)
@@ -251,7 +277,6 @@ class App:
         self.demo_phase = 0
         self.demo_timer = 120
         self.demo_walker_x = -20
-        # タイトル画面に戻ったらBGM停止
         pyxel.stop()
 
     def start_autoplay_demo(self):
@@ -259,6 +284,7 @@ class App:
         self.init_entities(True)
         self.state_timer = 900
         self.demo_ai_shoot_timer = 60
+        self.play_bgm()  # デモでもBGMを再生
 
     def spawn_minor_aliens(self):
         existing_indices = {alien.original_index for alien in self.minor_aliens}
@@ -280,6 +306,13 @@ class App:
         )
 
     def update(self):
+        # BGM復帰処理を毎フレーム確認
+        if (
+            self.game_state == GameState.PLAYING
+            or self.game_state == GameState.AUTO_PLAY_DEMO
+        ):
+            self.update_bgm_resume()
+
         if self.game_state == GameState.TITLE_DEMO:
             self.update_title_demo()
         elif self.game_state == GameState.AUTO_PLAY_DEMO:
@@ -295,7 +328,6 @@ class App:
 
     def update_title_demo(self):
         speed = 1.25
-        # タイトル文字の間隔を調整
         char_width1 = 16
         total_width = len(self.title_line1) * char_width1
         title_x = (pyxel.width - total_width) / 2
@@ -350,7 +382,7 @@ class App:
             self.bullets.append(
                 Bullet(self.player.x + self.player.w / 2 - 1, self.player.y)
             )
-            pyxel.play(0, 0)
+            self.play_se(30)
             self.demo_ai_shoot_timer = 30 + random.random() * 60
 
         self.update_world()
@@ -367,7 +399,7 @@ class App:
             self.bullets.append(
                 Bullet(self.player.x + self.player.w / 2 - 1, self.player.y)
             )
-            pyxel.play(0, 0)
+            self.play_se(30)
             self.can_shoot = False
 
         if not pyxel.btn(pyxel.KEY_CTRL):
@@ -397,7 +429,6 @@ class App:
         self.update_world()
 
     def update_world(self):
-        # プレイヤー以外の全てのオブジェクトの更新
         for p in self.particles[:]:
             p.update()
             if p.life <= 0:
@@ -481,7 +512,6 @@ class App:
                 self.destroy_station(is_non_interactive)
                 self.bullets.remove(b)
                 return
-
             if not self.is_barrier_disabled:
                 time = pyxel.frame_count
                 dynamic_amplitude = self.barrier_amplitude + 2 * math.sin(time / 20)
@@ -496,10 +526,9 @@ class App:
                         barrier_y_at_bullet,
                         {"count": 10, "color": 12, "life": 30, "speed": 2, "size": 2},
                     )
-                    pyxel.play(1, 1)
+                    self.play_se(31)
                     self.bullets.remove(b)
                     continue
-
             if (
                 self.large_missile.is_alive
                 and self.is_barrier_disabled
@@ -512,12 +541,11 @@ class App:
                 )
                 if not is_non_interactive:
                     self.score += 500
-                pyxel.play(2, 4)
+                self.play_se(33)
                 self.bullets.remove(b)
                 self.large_missile.is_alive = False
                 self.large_missile_respawn_timer = 180
                 continue
-
             if self.barrier_alien.is_alive and self.is_colliding(b, self.barrier_alien):
                 self.create_particle_burst(
                     self.barrier_alien.x + self.barrier_alien.w / 2,
@@ -526,13 +554,12 @@ class App:
                 )
                 if not is_non_interactive:
                     self.score += 200
-                pyxel.play(1, 5)
+                self.play_se(34)
                 self.is_barrier_disabled = True
                 self.barrier_disabled_timer = 180
                 self.barrier_alien.is_alive = False
                 self.bullets.remove(b)
                 continue
-
             bullet_removed = False
             for m in self.minor_aliens[:]:
                 if self.is_colliding(b, m):
@@ -544,14 +571,13 @@ class App:
                     self.minor_aliens.remove(m)
                     if not is_non_interactive:
                         self.score += 50
-                    pyxel.play(1, 6)
+                    self.play_se(35)
                     self.bullets.remove(b)
                     bullet_removed = True
                     break
             if bullet_removed:
                 continue
 
-        # プレイヤーの当たり判定はis_aliveで制御
         if self.player.is_alive and self.player.invincibility_timer <= 0:
             for m in self.minor_aliens[:]:
                 if self.is_colliding(self.player, m):
@@ -586,9 +612,8 @@ class App:
     def destroy_station(self, is_for_demo=False):
         if not self.station.is_alive:
             return
-
         self.station.is_alive = False
-        pyxel.play(2, 4)
+        self.play_se(33)
         self.create_particle_burst(
             self.station.x + self.station.w / 2,
             self.station.y + self.station.h / 2,
@@ -608,7 +633,7 @@ class App:
             self.player.y + self.player.h / 2,
             {"count": 80, "color": 8, "life": 78, "speed": 5, "size": 3},
         )
-        pyxel.play(2, 3)
+        self.play_se(32)
         self.lives -= 1
         self.player.is_alive = False
         self.player.respawn_timer = 120
@@ -622,7 +647,6 @@ class App:
 
     def draw(self):
         pyxel.cls(0)
-
         if self.game_state == GameState.TITLE_DEMO:
             self.draw_demo_screen()
         else:
@@ -638,7 +662,6 @@ class App:
             for particle in self.particles:
                 particle.draw()
             self.draw_ui()
-
             if self.game_state == GameState.AUTO_PLAY_DEMO:
                 pyxel.text(
                     pyxel.width / 2 - 25, 150, 'PUSH "RETURN"', pyxel.frame_count % 16
@@ -647,25 +670,21 @@ class App:
                 self.draw_game_over_screen()
 
     def draw_demo_screen(self):
-        title_y1 = 100
-        title_y2 = 120
+        title_y1, title_y2 = 100, 120
         char_width1 = 16
         total_width = len(self.title_line1) * char_width1
         title_x = (pyxel.width - total_width) / 2
-
         if 1 <= self.demo_phase < 6:
             walker_y = 175
             pyxel.rect(self.demo_walker_x, walker_y + 8, 6, 4, 8)
             pyxel.rect(self.demo_walker_x, walker_y + 4, 6, 4, 11)
             pyxel.rect(self.demo_walker_x, walker_y, 6, 4, 7)
-
         reveal_width = (
             self.demo_title_reveal_x - title_x
             if self.demo_phase > 1
             else total_width + 100
         )
         char_width2 = total_width / len(self.title_line2)
-
         for i, char in enumerate(self.title_line1):
             char_x = title_x + i * char_width1
             if char_x < title_x + reveal_width:
@@ -675,7 +694,6 @@ class App:
                     char,
                     self.title_colors[i % len(self.title_colors)],
                 )
-
         for i, char in enumerate(self.title_line2):
             char_x = title_x + i * char_width2
             if char_x < title_x + reveal_width:
@@ -689,22 +707,18 @@ class App:
     def draw_barrier(self):
         if self.is_barrier_disabled:
             return
-
         time = pyxel.frame_count
-
         barrier_colors = [10, 11, 12, 5, 9, 8]
         color_change_speed = 45
         current_color = barrier_colors[
             (time // color_change_speed) % len(barrier_colors)
         ]
-
         for x in range(pyxel.width):
             dynamic_amplitude = self.barrier_amplitude + 2 * math.sin(time / 20.0)
             y = (
                 self.barrier_y
                 + math.sin(x * self.barrier_frequency - time / 1.5) * dynamic_amplitude
             )
-
             pyxel.line(
                 x,
                 y - self.barrier_thickness,
